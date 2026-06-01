@@ -1,14 +1,16 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const path = require('path');
+const fs = require('fs');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const TARGET_CHANNEL_ID = "1510862057900347483";
 const VOICE_CHANNEL_ID = "1251635522070384643";
-const TEST_MODE = true; // Set to false to disable /teststorm
+const TEST_MODE = true; 
 
+// --- NOISE LOGIC ---
 const SEED = -1753269629;
 const NOISE_FACTOR = 0.00018;
 const STEP_SECONDS = 5;
@@ -36,7 +38,6 @@ function nowSec() { return Math.floor(Date.now() / 1000); }
 function sampleAt(t) {
   let intensity = noise(t * NOISE_FACTOR) + 0.5;
   let humidity = Math.pow(noise(t * NOISE_FACTOR, 123.4567) + 0.5, 1.35);
-  if (!isFinite(humidity) || isNaN(humidity)) humidity = 0;
   return { intensity, humidity: Math.max(0, Math.min(1, humidity)) };
 }
 function isStorm(t) { const s = sampleAt(t); return s.intensity >= 0.65 && s.humidity >= 0.75; }
@@ -48,49 +49,51 @@ function findNextStormStart(startTime = nowSec(), hours = 168) {
   }
   return null;
 }
-function findStormDuration(startUnix, hours = 24) {
-  const steps = (hours * 3600) / STEP_SECONDS;
-  let duration = 0;
-  for (let i = 1; i <= steps; i++) {
-    const t = startUnix + SEED + (i * STEP_SECONDS);
-    if (!isStorm(t)) break;
-    duration += STEP_SECONDS;
-  }
-  return duration;
+
+// --- AUDIO LOGIC ---
+async function playStormAudio() {
+    const channel = client.channels.cache.get(VOICE_CHANNEL_ID);
+    if (!channel) return console.error("Voice channel not found");
+    
+    const connection = joinVoiceChannel({ 
+        channelId: channel.id, 
+        guildId: channel.guild.id, 
+        adapterCreator: channel.guild.voiceAdapterCreator 
+    });
+    
+    const player = createAudioPlayer();
+    // Updated to .ogg files
+    const files = ['ZeusLightningStart1.ogg', 'ZeusLightningStart2.ogg'];
+    const filePath = path.join(__dirname, 'Audios', files[Math.floor(Math.random() * files.length)]);
+    
+    if (fs.existsSync(filePath)) {
+        const resource = createAudioResource(filePath);
+        connection.subscribe(player);
+        player.play(resource);
+        player.on('error', e => console.error('Audio Player Error:', e));
+        player.on(AudioPlayerStatus.Idle, () => connection.destroy());
+    } else {
+        console.error("Audio file not found:", filePath);
+    }
 }
 
+// --- BOT INITIALIZATION ---
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 let lastWeatherState = false;
 
-async function playStormAudio() {
-    const channel = client.channels.cache.get(VOICE_CHANNEL_ID);
-    if (!channel) return;
-    const connection = joinVoiceChannel({ channelId: channel.id, guildId: channel.guild.id, adapterCreator: channel.guild.voiceAdapterCreator });
-    const player = createAudioPlayer();
-    const files = ['ZeusLightningStart1.mp3', 'ZeusLightningStart2.mp3'];
-    const file = files[Math.floor(Math.random() * files.length)];
-    const resource = createAudioResource(path.join(__dirname, 'Audios', file));
-    connection.subscribe(player);
-    player.play(resource);
-    player.on(AudioPlayerStatus.Idle, () => { connection.destroy(); });
-}
-
 client.once("ready", async () => {
-    const commands = [
-        new SlashCommandBuilder().setName("nextstorm").setDescription("Find next storm"),
-    ];
+    const commands = [new SlashCommandBuilder().setName("nextstorm").setDescription("Find next storm")];
     if (TEST_MODE) commands.push(new SlashCommandBuilder().setName("teststorm").setDescription("Trigger audio test"));
     const rest = new REST({ version: "10" }).setToken(TOKEN);
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log("Bot Ready");
+    console.log("Bot Ready.");
 });
 
 client.on("interactionCreate", async (i) => {
     if (!i.isChatInputCommand()) return;
     if (i.commandName === "teststorm") {
-        if (!TEST_MODE) return i.reply({ content: "Disabled.", ephemeral: true });
         await playStormAudio();
-        return i.reply({ content: "🔊 Triggered.", ephemeral: true });
+        return i.reply({ content: "🔊 Testing...", ephemeral: true });
     }
     await i.deferReply({ ephemeral: true });
     const targetChannel = await client.channels.fetch(TARGET_CHANNEL_ID).catch(() => null);
