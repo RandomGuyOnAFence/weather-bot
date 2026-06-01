@@ -1,24 +1,11 @@
-require("dotenv").config();
-
-const {
-  Client,
-  GatewayIntentBits,
-  REST,
-  Routes,
-  SlashCommandBuilder
-} = require("discord.js");
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
 
 // ============================================================
 // CONFIG
 // ============================================================
-const TOKEN     = process.env.TOKEN;
+const TOKEN     = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID  = process.env.GUILD_ID;
-
-if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
-  console.error("Missing environment variables. Check Railway Variables.");
-  process.exit(1);
-}
 
 // ============================================================
 // PERLIN NOISE
@@ -89,7 +76,7 @@ function noise(x, y = 0, z = 0) {
 }
 
 // ============================================================
-// FIX: TIME NORMALIZATION (IMPORTANT)
+// FIXED TIME SYSTEM (IMPORTANT)
 // ============================================================
 const SEED = -1753269629;
 const NOISE_FACTOR = 0.00018;
@@ -100,13 +87,13 @@ function normalizeTime(t) {
   return t - BASE_TIME;
 }
 
-// ============================================================
-// CORE WEATHER FUNCTIONS
-// ============================================================
 function getCurrentTimeSec() {
   return Math.floor(Date.now() / 1000);
 }
 
+// ============================================================
+// WEATHER CORE
+// ============================================================
 function sampleAt(t) {
   t = normalizeTime(t);
 
@@ -124,32 +111,35 @@ function isStorm(t) {
   return intensity > 0.65 && humidity > 0.75;
 }
 
+// ============================================================
+// NEXT STORM (FIXED)
+// ============================================================
 function findNextStormStart(searchHours = 168) {
   const now = getCurrentTimeSec();
   const steps = Math.floor((searchHours * 3600) / STEP_SECONDS);
 
   let i = 0;
 
-  while (i < steps && isStorm(normalizeTime(now + i * STEP_SECONDS))) i++;
+  while (i < steps && isStorm(now + i * STEP_SECONDS)) i++;
 
   while (i < steps) {
-    const t = normalizeTime(now + i * STEP_SECONDS);
-
-    if (isStorm(t)) {
-      return now + i * STEP_SECONDS;
-    }
+    const t = now + i * STEP_SECONDS;
+    if (isStorm(t)) return t;
     i++;
   }
 
   return null;
 }
 
+// ============================================================
+// STORM DURATION (FIXED)
+// ============================================================
 function findStormDuration(startTimestamp, maxHours = 72) {
   const steps = Math.floor((maxHours * 3600) / STEP_SECONDS);
   let duration = 0;
 
   for (let i = 0; i < steps; i++) {
-    const t = normalizeTime(startTimestamp + i * STEP_SECONDS);
+    const t = startTimestamp + i * STEP_SECONDS;
     if (!isStorm(t)) break;
     duration += STEP_SECONDS;
   }
@@ -157,87 +147,35 @@ function findStormDuration(startTimestamp, maxHours = 72) {
   return duration;
 }
 
+// ============================================================
+// FORMAT
+// ============================================================
 function formatDuration(seconds) {
-  if (seconds <= 0) return "0m";
+  if (!seconds) return "0m";
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-
-  let out = "";
-  if (h) out += `${h}h `;
-  if (m) out += `${m}m `;
-  if (s && !h) out += `${s}s`;
-
-  return out.trim();
-}
-
-function getCurrentWeatherType() {
-  const now = getCurrentTimeSec();
-  const samples = [];
-
-  for (let i = 0; i < 144; i++) {
-    samples.push(sampleAt(now - i * STEP_SECONDS));
-  }
-
-  const avgI = samples.reduce((a, b) => a + b.intensity, 0) / samples.length;
-  const avgH = samples.reduce((a, b) => a + b.humidity, 0) / samples.length;
-
-  if (avgI < 0.2 && avgH < 0.5) return { type: "Clear Skies", emoji: "☀️" };
-  if (avgI < 0.6 && avgH < 0.5) return { type: "Partly Cloudy", emoji: "⛅" };
-  if (avgI < 0.65 || avgH < 0.75) return { type: "Overcast", emoji: "☁️" };
-  if (isStorm(now)) return { type: "Lightning Storm", emoji: "⛈️" };
-  return { type: "Rainy", emoji: "🌧️" };
-}
-
-function getWeekForecast() {
-  const now = getCurrentTimeSec();
-  const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-
-  return Array.from({ length: 7 }, (_, dayOffset) => {
-    const samples = Array.from({ length: 144 }, (_, i) =>
-      sampleAt(now - dayOffset * 86400 - i * STEP_SECONDS)
-    );
-
-    const avgI = samples.reduce((a,b)=>a+b.intensity,0)/samples.length;
-    const avgH = samples.reduce((a,b)=>a+b.humidity,0)/samples.length;
-
-    let type = "Clear", emoji = "☀️";
-
-    if (avgI < 0.6 && avgH < 0.5) { type = "P.Cloudy"; emoji = "⛅"; }
-    else if (avgI < 0.65 || avgH < 0.75) { type = "Overcast"; emoji = "☁️"; }
-    else if (avgI < 0.8) { type = "Rainy"; emoji = "🌧️"; }
-    else { type = "Stormy"; emoji = "⛈️"; }
-
-    const ts = now + dayOffset * 86400;
-    const dayName = days[new Date(ts * 1000).getDay()];
-
-    return { dayName, type, emoji, ts };
-  });
-}
-
-// ============================================================
-// SLASH COMMANDS
-// ============================================================
-const commands = [
-  new SlashCommandBuilder().setName("nextstorm").setDescription("Next storm info"),
-  new SlashCommandBuilder().setName("weather").setDescription("Current weather"),
-  new SlashCommandBuilder().setName("forecast").setDescription("7-day forecast"),
-  new SlashCommandBuilder().setName("stormcheck").setDescription("Storm status"),
-].map(c => c.toJSON());
-
-async function registerCommands() {
-  const rest = new REST({ version: "10" }).setToken(TOKEN);
-
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: commands }
-  );
+  return `${h ? h + "h " : ""}${m ? m + "m" : ""}`.trim();
 }
 
 // ============================================================
 // CLIENT
 // ============================================================
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+const commands = [
+  new SlashCommandBuilder().setName("nextstorm").setDescription("Next storm"),
+  new SlashCommandBuilder().setName("weather").setDescription("Weather"),
+  new SlashCommandBuilder().setName("forecast").setDescription("Forecast"),
+  new SlashCommandBuilder().setName("stormcheck").setDescription("Storm check"),
+].map(c => c.toJSON());
+
+async function registerCommands() {
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+    { body: commands }
+  );
+}
 
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -250,15 +188,14 @@ client.on("interactionCreate", async interaction => {
 
   const now = getCurrentTimeSec();
 
-  if (interaction.commandName === "weather") {
-    const w = getCurrentWeatherType();
-    return interaction.editReply(`${w.emoji} ${w.type}`);
-  }
+  if (interaction.commandName === "nextstorm") {
+    const start = findNextStormStart();
+    if (!start) return interaction.editReply("No storm found");
 
-  if (interaction.commandName === "forecast") {
-    const f = getWeekForecast();
+    const dur = findStormDuration(start);
+
     return interaction.editReply(
-      f.map(d => `${d.emoji} ${d.dayName} — ${d.type}`).join("\n")
+      `⛈️ Next storm <t:${start}:R>\nDuration: ${formatDuration(dur)}`
     );
   }
 
@@ -270,14 +207,13 @@ client.on("interactionCreate", async interaction => {
     );
   }
 
-  if (interaction.commandName === "nextstorm") {
-    const start = findNextStormStart();
-    if (!start) return interaction.editReply("No storm found");
+  if (interaction.commandName === "weather") {
+    const w = sampleAt(now);
+    return interaction.editReply(`Intensity: ${w.intensity.toFixed(2)}`);
+  }
 
-    const dur = findStormDuration(start);
-    return interaction.editReply(
-      `⛈️ Next storm <t:${start}:R>\nDuration: ${formatDuration(dur)}`
-    );
+  if (interaction.commandName === "forecast") {
+    return interaction.editReply("Forecast system simplified in this build.");
   }
 });
 
