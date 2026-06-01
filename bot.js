@@ -1,15 +1,24 @@
-// ============================================================
-// DEPENDENCIES
-// npm install discord.js
-// ============================================================
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
+require("dotenv").config();
+
+const {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder
+} = require("discord.js");
 
 // ============================================================
-// CONFIG - fill these in
+// CONFIG
 // ============================================================
-const TOKEN      = "YOUR_BOT_TOKEN";
-const CLIENT_ID  = "YOUR_CLIENT_ID";
-const GUILD_ID   = "YOUR_GUILD_ID"; // remove this for global commands
+const TOKEN     = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID  = process.env.GUILD_ID;
+
+if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
+  console.error("Missing environment variables. Check Railway Variables.");
+  process.exit(1);
+}
 
 // ============================================================
 // PERLIN NOISE
@@ -56,35 +65,40 @@ function noise(x, y = 0, z = 0) {
   const v = fade(y);
   const w = fade(z);
 
-  const a  = perm[fx]     + fy;
-  const aa = perm[a]      + fz;
-  const ab = perm[a  + 1] + fz;
+  const a  = perm[fx] + fy;
+  const aa = perm[a] + fz;
+  const ab = perm[a + 1] + fz;
   const b  = perm[fx + 1] + fy;
-  const ba = perm[b]      + fz;
-  const bb = perm[b  + 1] + fz;
+  const ba = perm[b] + fz;
+  const bb = perm[b + 1] + fz;
 
   return lerp(w,
     lerp(v,
-      lerp(u, grad(perm[aa],     x,     y,     z),
-               grad(perm[ba],     x - 1, y,     z)),
-      lerp(u, grad(perm[ab],     x,     y - 1, z),
-               grad(perm[bb],     x - 1, y - 1, z))
+      lerp(u, grad(perm[aa], x, y, z),
+               grad(perm[ba], x - 1, y, z)),
+      lerp(u, grad(perm[ab], x, y - 1, z),
+               grad(perm[bb], x - 1, y - 1, z))
     ),
     lerp(v,
-      lerp(u, grad(perm[aa + 1], x,     y,     z - 1),
-               grad(perm[ba + 1], x - 1, y,     z - 1)),
-      lerp(u, grad(perm[ab + 1], x,     y - 1, z - 1),
+      lerp(u, grad(perm[aa + 1], x, y, z - 1),
+               grad(perm[ba + 1], x - 1, y, z - 1)),
+      lerp(u, grad(perm[ab + 1], x, y - 1, z - 1),
                grad(perm[bb + 1], x - 1, y - 1, z - 1))
     )
   );
 }
 
 // ============================================================
-// CONSTANTS
+// FIX: TIME NORMALIZATION (IMPORTANT)
 // ============================================================
-const SEED         = -1753269629;
+const SEED = -1753269629;
 const NOISE_FACTOR = 0.00018;
-const STEP_SECONDS = 600; // sample every 10 minutes
+const STEP_SECONDS = 600;
+const BASE_TIME = 1000000000;
+
+function normalizeTime(t) {
+  return t - BASE_TIME;
+}
 
 // ============================================================
 // CORE WEATHER FUNCTIONS
@@ -94,10 +108,14 @@ function getCurrentTimeSec() {
 }
 
 function sampleAt(t) {
+  t = normalizeTime(t);
+
   let intensity = noise(t * NOISE_FACTOR) * 0.5;
-  let humidity  = Math.round(noise(t * NOISE_FACTOR, 123.4567) * 0.5 + 1.35);
-  intensity     = Math.max(0, Math.min(1, intensity));
-  humidity      = Math.max(0, Math.min(1, humidity));
+  let humidity  = noise(t * NOISE_FACTOR, 123.4567) * 0.5 + 0.5;
+
+  intensity = Math.max(0, Math.min(1, intensity));
+  humidity  = Math.max(0, Math.min(1, humidity));
+
   return { intensity, humidity };
 }
 
@@ -106,167 +124,118 @@ function isStorm(t) {
   return intensity > 0.65 && humidity > 0.75;
 }
 
-// ============================================================
-// FIND NEXT STORM START
-// Returns Unix timestamp (seconds) of when next storm begins,
-// or null if none found within the search window.
-// ============================================================
-function findNextStormStart(searchHours = 168) { // search 7 days ahead
-  const now        = getCurrentTimeSec();
-  const maxSeconds = searchHours * 3600;
-  const steps      = Math.floor(maxSeconds / STEP_SECONDS);
+function findNextStormStart(searchHours = 168) {
+  const now = getCurrentTimeSec();
+  const steps = Math.floor((searchHours * 3600) / STEP_SECONDS);
 
-  // If we are currently in a storm, skip past it first
   let i = 0;
-  while (i < steps && isStorm(now - SEED + i * STEP_SECONDS)) i++;
 
-  // Now find where the next storm begins
+  while (i < steps && isStorm(normalizeTime(now + i * STEP_SECONDS))) i++;
+
   while (i < steps) {
-    const t = now - SEED + i * STEP_SECONDS;
+    const t = normalizeTime(now + i * STEP_SECONDS);
+
     if (isStorm(t)) {
-      // Refine: walk back to find exact start within this step
-      for (let s = STEP_SECONDS; s >= 60; s = Math.floor(s / 2)) {
-        const tBack = t - s;
-        if (!isStorm(tBack)) break;
-        return Math.floor(now + (i * STEP_SECONDS) - s);
-      }
-      return Math.floor(now + i * STEP_SECONDS);
+      return now + i * STEP_SECONDS;
     }
     i++;
   }
 
-  return null; // no storm found in window
+  return null;
 }
 
-// ============================================================
-// FIND STORM DURATION
-// Given a storm start timestamp, walk forward until it ends.
-// Returns duration in seconds.
-// ============================================================
 function findStormDuration(startTimestamp, maxHours = 72) {
-  const maxSeconds = maxHours * 3600;
-  const steps      = Math.floor(maxSeconds / STEP_SECONDS);
-  let   duration   = 0;
+  const steps = Math.floor((maxHours * 3600) / STEP_SECONDS);
+  let duration = 0;
 
   for (let i = 0; i < steps; i++) {
-    const t = (startTimestamp - getCurrentTimeSec()) - SEED + i * STEP_SECONDS;
+    const t = normalizeTime(startTimestamp + i * STEP_SECONDS);
     if (!isStorm(t)) break;
     duration += STEP_SECONDS;
   }
 
-  return duration; // seconds
+  return duration;
 }
 
-// ============================================================
-// FORMAT DURATION  e.g. "2h 34m"
-// ============================================================
 function formatDuration(seconds) {
   if (seconds <= 0) return "0m";
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
+  const s = seconds % 60;
 
   let out = "";
-  if (h > 0) out += `${h}h `;
-  if (m > 0) out += `${m}m `;
-  if (s > 0 && h === 0) out += `${s}s`; // only show seconds if < 1h
+  if (h) out += `${h}h `;
+  if (m) out += `${m}m `;
+  if (s && !h) out += `${s}s`;
+
   return out.trim();
 }
 
-// ============================================================
-// CURRENT WEATHER TYPE
-// ============================================================
 function getCurrentWeatherType() {
   const now = getCurrentTimeSec();
   const samples = [];
 
   for (let i = 0; i < 144; i++) {
-    const t = (now - SEED) - (i * STEP_SECONDS);
-    samples.push(sampleAt(t));
+    samples.push(sampleAt(now - i * STEP_SECONDS));
   }
 
-  const avgIntensity = samples.reduce((a, b) => a + b.intensity, 0) / samples.length;
-  const avgHumidity  = samples.reduce((a, b) => a + b.humidity,  0) / samples.length;
+  const avgI = samples.reduce((a, b) => a + b.intensity, 0) / samples.length;
+  const avgH = samples.reduce((a, b) => a + b.humidity, 0) / samples.length;
 
-  if (avgIntensity < 0.2  && avgHumidity < 0.5)  return { type: "Clear Skies",      emoji: "☀️"  };
-  if (avgIntensity < 0.6  && avgHumidity < 0.5)  return { type: "Partially Cloudy", emoji: "⛅"  };
-  if (avgIntensity < 0.65 || avgHumidity < 0.75) return { type: "Overcast",          emoji: "☁️"  };
-  if (avgIntensity < 0.65 && avgHumidity < 0.75) return { type: "Rainy",             emoji: "🌧️" };
-  if (isStorm(now - SEED))                        return { type: "Lightning Storm",   emoji: "⛈️"  };
-  return                                                 { type: "Snowy",             emoji: "❄️"  };
+  if (avgI < 0.2 && avgH < 0.5) return { type: "Clear Skies", emoji: "☀️" };
+  if (avgI < 0.6 && avgH < 0.5) return { type: "Partly Cloudy", emoji: "⛅" };
+  if (avgI < 0.65 || avgH < 0.75) return { type: "Overcast", emoji: "☁️" };
+  if (isStorm(now)) return { type: "Lightning Storm", emoji: "⛈️" };
+  return { type: "Rainy", emoji: "🌧️" };
 }
 
-// ============================================================
-// 7-DAY FORECAST
-// ============================================================
 function getWeekForecast() {
-  const now     = getCurrentTimeSec();
-  const days    = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const results = [];
+  const now = getCurrentTimeSec();
+  const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
-  for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-    const samples = [];
+  return Array.from({ length: 7 }, (_, dayOffset) => {
+    const samples = Array.from({ length: 144 }, (_, i) =>
+      sampleAt(now - dayOffset * 86400 - i * STEP_SECONDS)
+    );
 
-    for (let i = 0; i < 144; i++) {
-      const t = (now - (dayOffset * 86400) - SEED) - (i * STEP_SECONDS);
-      samples.push(sampleAt(t));
-    }
+    const avgI = samples.reduce((a,b)=>a+b.intensity,0)/samples.length;
+    const avgH = samples.reduce((a,b)=>a+b.humidity,0)/samples.length;
 
-    const avgI = samples.reduce((a, b) => a + b.intensity, 0) / samples.length;
-    const avgH = samples.reduce((a, b) => a + b.humidity,  0) / samples.length;
+    let type = "Clear", emoji = "☀️";
 
-    let type, emoji;
-    if      (avgI < 0.2  && avgH < 0.5)  { type = "Clear";    emoji = "☀️";  }
-    else if (avgI < 0.6  && avgH < 0.5)  { type = "P.Cloudy"; emoji = "⛅";  }
-    else if (avgI < 0.65 || avgH < 0.75) { type = "Overcast"; emoji = "☁️";  }
-    else if (avgI < 0.65 && avgH < 0.75) { type = "Rainy";    emoji = "🌧️"; }
-    else                                  { type = "Stormy";   emoji = "⛈️";  }
+    if (avgI < 0.6 && avgH < 0.5) { type = "P.Cloudy"; emoji = "⛅"; }
+    else if (avgI < 0.65 || avgH < 0.75) { type = "Overcast"; emoji = "☁️"; }
+    else if (avgI < 0.8) { type = "Rainy"; emoji = "🌧️"; }
+    else { type = "Stormy"; emoji = "⛈️"; }
 
-    const date    = new Date((now + dayOffset * 86400) * 1000);
-    const dayName = days[date.getDay()];
-    results.push({ dayName, type, emoji });
-  }
+    const ts = now + dayOffset * 86400;
+    const dayName = days[new Date(ts * 1000).getDay()];
 
-  return results;
+    return { dayName, type, emoji, ts };
+  });
 }
 
 // ============================================================
-// REGISTER SLASH COMMANDS
+// SLASH COMMANDS
 // ============================================================
 const commands = [
-  new SlashCommandBuilder()
-    .setName("nextstorm")
-    .setDescription("Shows the time until the next storm and how long it will last"),
-
-  new SlashCommandBuilder()
-    .setName("weather")
-    .setDescription("Shows the current weather conditions"),
-
-  new SlashCommandBuilder()
-    .setName("forecast")
-    .setDescription("Shows the 7-day weather forecast"),
-
-  new SlashCommandBuilder()
-    .setName("stormcheck")
-    .setDescription("Check if there is currently a storm active"),
-].map(cmd => cmd.toJSON());
+  new SlashCommandBuilder().setName("nextstorm").setDescription("Next storm info"),
+  new SlashCommandBuilder().setName("weather").setDescription("Current weather"),
+  new SlashCommandBuilder().setName("forecast").setDescription("7-day forecast"),
+  new SlashCommandBuilder().setName("stormcheck").setDescription("Storm status"),
+].map(c => c.toJSON());
 
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(TOKEN);
-  try {
-    console.log("Registering slash commands...");
-    await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-      { body: commands }
-    );
-    console.log("Slash commands registered.");
-  } catch (err) {
-    console.error("Failed to register commands:", err);
-  }
+
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+    { body: commands }
+  );
 }
 
 // ============================================================
-// DISCORD CLIENT
+// CLIENT
 // ============================================================
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
@@ -277,138 +246,39 @@ client.once("ready", () => {
 
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
-
-  // Defer so we have time to compute
   await interaction.deferReply();
 
-  const { commandName } = interaction;
+  const now = getCurrentTimeSec();
 
-  // ----------------------------------------------------------
-  // /nextstorm
-  // ----------------------------------------------------------
-  if (commandName === "nextstorm") {
-    const stormStart = findNextStormStart(168); // search 7 days
-
-    if (!stormStart) {
-      return interaction.editReply({
-        content: "⛅ **No storms detected** in the next 7 days. Enjoy the calm!"
-      });
-    }
-
-    const now         = getCurrentTimeSec();
-    const duration    = findStormDuration(stormStart, 72);
-    const stormEnd    = stormStart + duration;
-    const isNow       = stormStart <= now;
-
-    // Discord timestamp formats:
-    // <t:UNIX:R> = relative  ("in 3 hours")
-    // <t:UNIX:F> = full date ("Monday, June 2 2025 at 3:00 PM")
-    // <t:UNIX:t> = short time ("3:00 PM")
-
-    if (isNow) {
-      // Storm is happening right now
-      return interaction.editReply({
-        content: [
-          "⛈️ **Storm is active RIGHT NOW!**",
-          "",
-          `🕐 **Started:** <t:${stormStart}:R>`,
-          `🏁 **Ends:** <t:${stormEnd}:R> (<t:${stormEnd}:t>)`,
-          `⏱️ **Duration:** ${formatDuration(duration)}`,
-          `📅 **End date:** <t:${stormEnd}:F>`,
-        ].join("\n")
-      });
-    } else {
-      return interaction.editReply({
-        content: [
-          "⛈️ **Next Storm Incoming!**",
-          "",
-          `🕐 **Arrives:** <t:${stormStart}:R> (<t:${stormStart}:t>)`,
-          `📅 **Date:** <t:${stormStart}:F>`,
-          `⏱️ **Will last:** ${formatDuration(duration)}`,
-          `🏁 **Clears:** <t:${stormEnd}:R> (<t:${stormEnd}:t>)`,
-        ].join("\n")
-      });
-    }
+  if (interaction.commandName === "weather") {
+    const w = getCurrentWeatherType();
+    return interaction.editReply(`${w.emoji} ${w.type}`);
   }
 
-  // ----------------------------------------------------------
-  // /weather
-  // ----------------------------------------------------------
-  if (commandName === "weather") {
-    const { type, emoji } = getCurrentWeatherType();
-    const now             = getCurrentTimeSec();
-    const { intensity, humidity } = sampleAt(now - SEED);
-
-    return interaction.editReply({
-      content: [
-        `${emoji} **Current Weather: ${type}**`,
-        "",
-        `💧 **Humidity:** ${Math.round(humidity * 100)}%`,
-        `🌡️ **Intensity:** ${Math.round(intensity * 100)}%`,
-        `🕐 **As of:** <t:${now}:t>`,
-      ].join("\n")
-    });
-  }
-
-  // ----------------------------------------------------------
-  // /forecast
-  // ----------------------------------------------------------
-  if (commandName === "forecast") {
-    const forecast = getWeekForecast();
-    const lines    = forecast.map(
-      (day, i) => `${day.emoji} **${day.dayName}** — ${day.type}`
+  if (interaction.commandName === "forecast") {
+    const f = getWeekForecast();
+    return interaction.editReply(
+      f.map(d => `${d.emoji} ${d.dayName} — ${d.type}`).join("\n")
     );
-
-    return interaction.editReply({
-      content: [
-        "📅 **7-Day Forecast**",
-        "",
-        ...lines
-      ].join("\n")
-    });
   }
 
-  // ----------------------------------------------------------
-  // /stormcheck
-  // ----------------------------------------------------------
-  if (commandName === "stormcheck") {
-    const now       = getCurrentTimeSec();
-    const storming  = isStorm(now - SEED);
+  if (interaction.commandName === "stormcheck") {
+    return interaction.editReply(
+      isStorm(now)
+        ? "⛈️ Storm active"
+        : "☀️ No storm"
+    );
+  }
 
-    if (storming) {
-      const duration = findStormDuration(now, 72);
-      const stormEnd = now + duration;
+  if (interaction.commandName === "nextstorm") {
+    const start = findNextStormStart();
+    if (!start) return interaction.editReply("No storm found");
 
-      return interaction.editReply({
-        content: [
-          "⛈️ **YES — A storm is active right now!**",
-          "",
-          `🏁 **Expected to clear:** <t:${stormEnd}:R>`,
-          `⏱️ **Remaining duration:** ${formatDuration(duration)}`,
-        ].join("\n")
-      });
-    } else {
-      const nextStart = findNextStormStart(168);
-
-      if (!nextStart) {
-        return interaction.editReply({
-          content: "☀️ **No storm active.** Clear skies ahead for the next 7 days!"
-        });
-      }
-
-      return interaction.editReply({
-        content: [
-          "☀️ **No storm active right now.**",
-          "",
-          `⛈️ **Next storm:** <t:${nextStart}:R>`,
-          `📅 **On:** <t:${nextStart}:F>`,
-        ].join("\n")
-      });
-    }
+    const dur = findStormDuration(start);
+    return interaction.editReply(
+      `⛈️ Next storm <t:${start}:R>\nDuration: ${formatDuration(dur)}`
+    );
   }
 });
 
-// ============================================================
-// LOGIN
-// ============================================================
 client.login(TOKEN);
