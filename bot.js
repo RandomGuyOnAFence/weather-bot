@@ -7,9 +7,9 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require
 // ============================================================
 // CONFIG - fill these in
 // ============================================================
-const TOKEN      = "YOUR_BOT_TOKEN";
-const CLIENT_ID  = "YOUR_CLIENT_ID";
-const GUILD_ID   = "YOUR_GUILD_ID"; // remove this for global commands
+const TOKEN      = process.env.DISCORD_TOKEN;
+const CLIENT_ID  = process.env.CLIENT_ID;
+const GUILD_ID   = process.env.GUILD_ID; // remove this for global commands
 
 // ============================================================
 // PERLIN NOISE
