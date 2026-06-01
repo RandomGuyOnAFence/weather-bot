@@ -17,7 +17,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID  = process.env.GUILD_ID;
 
 // ============================================================
-// CONSTANTS (MUST MATCH WEB)
+// CONSTANTS (WEB MATCH)
 // ============================================================
 const SEED = -1753269629;
 const NOISE_FACTOR = 0.00018;
@@ -91,11 +91,11 @@ function noise(x, y = 0, z = 0) {
 // TIME
 // ============================================================
 function nowSec() {
-  return Date.now() / 1000;
+  return Math.floor(Date.now() / 1000);
 }
 
 // ============================================================
-// 1:1 WEB WEATHER SAMPLE
+// WEATHER ENGINE (1:1)
 // ============================================================
 function sampleAt(t) {
   let intensity = noise(t * NOISE_FACTOR) * 0.5;
@@ -108,44 +108,66 @@ function sampleAt(t) {
 }
 
 function isStorm(t) {
-  const { intensity, humidity } = sampleAt(t);
-  return intensity > 0.65 && humidity > 0.75;
+  const s = sampleAt(t);
+  return s.intensity > 0.65 && s.humidity > 0.75;
 }
 
 // ============================================================
-// 1:1 NEXT STORM (FIXED)
+// STORM FUNCTIONS (1:1)
 // ============================================================
-function findNextStormStart(searchHours = 168) {
+function findNextStormStart(hours = 168) {
   const now = nowSec();
-  const steps = Math.floor((searchHours * 3600) / STEP_SECONDS);
+  const steps = Math.floor((hours * 3600) / STEP_SECONDS);
 
   for (let i = 0; i < steps; i++) {
     const t = (now - SEED) - (i * STEP_SECONDS);
-
-    if (isStorm(t)) {
-      return now + (i * STEP_SECONDS);
-    }
+    if (isStorm(t)) return now + (i * STEP_SECONDS);
   }
 
   return null;
 }
 
-// ============================================================
-// 1:1 STORM DURATION
-// ============================================================
-function findStormDuration(startTimestamp, maxHours = 72) {
-  const steps = Math.floor((maxHours * 3600) / STEP_SECONDS);
+function findStormDuration(start, hours = 72) {
+  const steps = Math.floor((hours * 3600) / STEP_SECONDS);
   let duration = 0;
 
   for (let i = 0; i < steps; i++) {
-    const t = (startTimestamp - SEED) - (i * STEP_SECONDS);
-
+    const t = (start - SEED) - (i * STEP_SECONDS);
     if (!isStorm(t)) break;
-
     duration += STEP_SECONDS;
   }
 
   return duration;
+}
+
+// ============================================================
+// DEBUG TOOL (PARITY CHECKER)
+// ============================================================
+function debugStormParity(samples = 25) {
+  const now = nowSec();
+
+  console.log("\n========== STORM PARITY DEBUG ==========\n");
+  console.log("i | t | intensity | humidity | storm");
+
+  for (let i = 0; i < samples; i++) {
+    const t = (now - SEED) - (i * STEP_SECONDS);
+    const s = sampleAt(t);
+    const storm = isStorm(t);
+
+    console.log(
+      i,
+      "|",
+      t,
+      "|",
+      s.intensity.toFixed(3),
+      "|",
+      s.humidity.toFixed(3),
+      "|",
+      storm ? "YES" : "NO"
+    );
+  }
+
+  console.log("\n========================================\n");
 }
 
 // ============================================================
@@ -156,7 +178,10 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const commands = [
   new SlashCommandBuilder()
     .setName("nextstorm")
-    .setDescription("Shows next storm"),
+    .setDescription("Find next storm"),
+  new SlashCommandBuilder()
+    .setName("debugstorm")
+    .setDescription("Print storm parity debug logs")
 ].map(c => c.toJSON());
 
 async function register() {
@@ -174,23 +199,29 @@ client.once("ready", async () => {
 
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
+
+  if (i.commandName === "debugstorm") {
+    debugStormParity(40);
+    return i.reply("📊 Debug printed to console.");
+  }
+
   if (i.commandName !== "nextstorm") return;
 
   await i.deferReply();
 
-  const stormStart = findNextStormStart(168);
+  const stormStart = findNextStormStart();
 
   if (!stormStart) {
     return i.editReply("⛅ No storms in range.");
   }
 
   const duration = findStormDuration(stormStart);
-  const stormEnd = stormStart + duration;
+  const end = stormStart + duration;
 
   return i.editReply(
-    `⛈️ Next Storm:\n` +
+    `⛈️ Next storm:\n` +
     `Start: <t:${stormStart}:R>\n` +
-    `End: <t:${stormEnd}:R>\n` +
+    `End: <t:${end}:R>\n` +
     `Duration: ${Math.floor(duration / 3600)}h`
   );
 });
