@@ -53,12 +53,19 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 let lastWeatherState = false;
 
 async function playStormAudio() {
-    const channel = client.channels.cache.get(VOICE_CHANNEL_ID);
+    const channel = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
     if (!channel) return;
-    const connection = joinVoiceChannel({ channelId: channel.id, guildId: channel.guild.id, adapterCreator: channel.guild.voiceAdapterCreator });
+    
+    const connection = joinVoiceChannel({ 
+        channelId: channel.id, 
+        guildId: channel.guild.id, 
+        adapterCreator: channel.guild.voiceAdapterCreator 
+    });
+    
     const player = createAudioPlayer();
     const files = ['ZeusLightningStart1.ogg', 'ZeusLightningStart2.ogg'];
     const filePath = path.join(__dirname, 'Audios', files[Math.floor(Math.random() * files.length)]);
+    
     if (fs.existsSync(filePath)) {
         const resource = createAudioResource(filePath);
         connection.subscribe(player);
