@@ -148,8 +148,13 @@ function findStormDuration(startTimestamp, maxHours = 72) {
   const steps      = Math.floor(maxSeconds / STEP_SECONDS);
   let   duration   = 0;
 
+  // Mirror the web script's approach: derive elapsed from the current Unix
+  // timestamp and SEED, then use (elapsed + SEED) as the base so that t
+  // advances purely by step offsets — matching the original algorithm.
+  const elapsed = startTimestamp - SEED;
+
   for (let i = 0; i < steps; i++) {
-    const t = startTimestamp - SEED + i * STEP_SECONDS;
+    const t = (elapsed + SEED) + i * STEP_SECONDS;
     if (!isStorm(t)) break;
     duration += STEP_SECONDS;
   }
