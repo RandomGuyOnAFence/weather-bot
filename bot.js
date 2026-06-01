@@ -1,13 +1,13 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const path = require('path');
-const fs = require('fs');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const TARGET_CHANNEL_ID = "1510862057900347483";
-const VOICE_CHANNEL_ID = "YOUR_VOICE_CHANNEL_ID_HERE";
+const VOICE_CHANNEL_ID = "1251635522070384643";
+const TEST_MODE = true; // Set to false to disable /teststorm
 
 const SEED = -1753269629;
 const NOISE_FACTOR = 0.00018;
@@ -62,12 +62,12 @@ function findStormDuration(startUnix, hours = 24) {
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 let lastWeatherState = false;
 
-async function playStormAudio(isStarting) {
+async function playStormAudio() {
     const channel = client.channels.cache.get(VOICE_CHANNEL_ID);
     if (!channel) return;
     const connection = joinVoiceChannel({ channelId: channel.id, guildId: channel.guild.id, adapterCreator: channel.guild.voiceAdapterCreator });
     const player = createAudioPlayer();
-    const files = isStarting ? ['ZeusLightningStart1.ogg', 'ZeusLightningStart2.ogg'] : ['ZeusLightningEnd1.ogg', 'ZeusLightningEnd2.ogg'];
+    const files = ['ZeusLightningStart1.mp3', 'ZeusLightningStart2.mp3'];
     const file = files[Math.floor(Math.random() * files.length)];
     const resource = createAudioResource(path.join(__dirname, 'Audios', file));
     connection.subscribe(player);
@@ -76,33 +76,35 @@ async function playStormAudio(isStarting) {
 }
 
 client.once("ready", async () => {
+    const commands = [
+        new SlashCommandBuilder().setName("nextstorm").setDescription("Find next storm"),
+    ];
+    if (TEST_MODE) commands.push(new SlashCommandBuilder().setName("teststorm").setDescription("Trigger audio test"));
+    const rest = new REST({ version: "10" }).setToken(TOKEN);
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
     console.log("Bot Ready");
 });
 
 client.on("interactionCreate", async (i) => {
     if (!i.isChatInputCommand()) return;
+    if (i.commandName === "teststorm") {
+        if (!TEST_MODE) return i.reply({ content: "Disabled.", ephemeral: true });
+        await playStormAudio();
+        return i.reply({ content: "🔊 Triggered.", ephemeral: true });
+    }
     await i.deferReply({ ephemeral: true });
     const targetChannel = await client.channels.fetch(TARGET_CHANNEL_ID).catch(() => null);
     if (!targetChannel) return i.editReply("Error: Target channel not found.");
-    let responseText = "";
-    if (i.commandName === "nextstorm") {
-        const start = findNextStormStart();
-        if (!start) responseText = "⛅ No storms.";
-        else {
-            const dur = findStormDuration(start);
-            responseText = `⛈️ Starts <t:${start}:R>, Ends <t:${start + dur}:R>`;
-        }
-    }
-    await targetChannel.send(responseText);
+    const start = findNextStormStart();
+    const response = start ? `⛈️ Next Storm: <t:${start}:R>` : "⛅ No storms.";
+    await targetChannel.send(response);
     await i.editReply(`✅ Posted in <#${TARGET_CHANNEL_ID}>`);
 });
 
 setInterval(async () => {
     const isNowStormy = isStorm(nowSec());
-    if (isNowStormy !== lastWeatherState) {
-        await playStormAudio(isNowStormy);
-        lastWeatherState = isNowStormy;
-    }
+    if (isNowStormy && !lastWeatherState) await playStormAudio();
+    lastWeatherState = isNowStormy;
 }, 5000);
 
 client.login(TOKEN);
