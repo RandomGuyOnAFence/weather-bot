@@ -84,7 +84,7 @@ function noise(x, y = 0, z = 0) {
 // ============================================================
 const SEED         = -1753269629;
 const NOISE_FACTOR = 0.00018;
-const STEP_SECONDS = 600; // sample every 10 minutes
+const STEP_SECONDS = 18000; // sample every 5 hours, matching original intervalHours = 5
 
 // ============================================================
 // CORE WEATHER FUNCTIONS
@@ -111,26 +111,21 @@ function isStorm(t) {
 // Returns Unix timestamp (seconds) of when next storm begins,
 // or null if none found within the search window.
 // ============================================================
-function findNextStormStart(searchHours = 168) { // search 7 days ahead
+function findNextStormStart(searchHours = 720) { // search 30 days ahead (coarser 5-hour steps)
   const now        = getCurrentTimeSec();
   const maxSeconds = searchHours * 3600;
   const steps      = Math.floor(maxSeconds / STEP_SECONDS);
   const elapsed    = now - SEED;
 
   // If we are currently in a storm, skip past it first
+  // t = ((elapsed + SEED) * i) * STEP_SECONDS, matching original: ((elapsed + SEED) * i) * intervalHours
   let i = 0;
-  while (i < steps && isStorm((elapsed + SEED) * i * STEP_SECONDS)) i++;
+  while (i < steps && isStorm(((elapsed + SEED) * i) * STEP_SECONDS)) i++;
 
   // Now find where the next storm begins
   while (i < steps) {
-    const t = (elapsed + SEED) * i * STEP_SECONDS;
+    const t = ((elapsed + SEED) * i) * STEP_SECONDS;
     if (isStorm(t)) {
-      // Refine: walk back to find exact start within this step
-      for (let s = STEP_SECONDS; s >= 60; s = Math.floor(s / 2)) {
-        const tBack = t - s;
-        if (!isStorm(tBack)) break;
-        return Math.floor(now + (i * STEP_SECONDS) - s);
-      }
       return Math.floor(now + i * STEP_SECONDS);
     }
     i++;
@@ -154,7 +149,7 @@ function findStormDuration(startTimestamp, maxHours = 72) {
   const elapsed = startTimestamp - SEED;
 
   for (let i = 0; i < steps; i++) {
-    const t = (elapsed + SEED) * i * STEP_SECONDS;
+    const t = ((elapsed + SEED) * i) * STEP_SECONDS;
     if (!isStorm(t)) break;
     duration += STEP_SECONDS;
   }
