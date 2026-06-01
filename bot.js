@@ -1,3 +1,6 @@
+// ============================================================
+// DEPENDENCIES
+// ============================================================
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
 
 // ============================================================
@@ -8,7 +11,14 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID  = process.env.GUILD_ID;
 
 // ============================================================
-// PERLIN NOISE
+// WEB-IDENTICAL CONSTANTS
+// ============================================================
+const SEED = -1753269629;
+const NOISE_FACTOR = 0.00018;
+const STEP_SECONDS = 600; // matches web sampling (10 min)
+
+// ============================================================
+// PERLIN NOISE (UNCHANGED)
 // ============================================================
 const permutation = [
   151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,140,36,103,30,69,
@@ -61,71 +71,55 @@ function noise(x, y = 0, z = 0) {
 
   return lerp(w,
     lerp(v,
-      lerp(u, grad(perm[aa], x, y, z),
-               grad(perm[ba], x - 1, y, z)),
-      lerp(u, grad(perm[ab], x, y - 1, z),
-               grad(perm[bb], x - 1, y - 1, z))
+      lerp(u, grad(perm[aa], x, y, z), grad(perm[ba], x - 1, y, z)),
+      lerp(u, grad(perm[ab], x, y - 1, z), grad(perm[bb], x - 1, y - 1, z))
     ),
     lerp(v,
-      lerp(u, grad(perm[aa + 1], x, y, z - 1),
-               grad(perm[ba + 1], x - 1, y, z - 1)),
-      lerp(u, grad(perm[ab + 1], x, y - 1, z - 1),
-               grad(perm[bb + 1], x - 1, y - 1, z - 1))
+      lerp(u, grad(perm[aa + 1], x, y, z - 1), grad(perm[ba + 1], x - 1, y, z - 1)),
+      lerp(u, grad(perm[ab + 1], x, y - 1, z - 1), grad(perm[bb + 1], x - 1, y - 1, z - 1))
     )
   );
 }
 
 // ============================================================
-// FIXED TIME SYSTEM (IMPORTANT)
+// WEB-IDENTICAL TIME MODEL
 // ============================================================
-const SEED = -1753269629;
-const NOISE_FACTOR = 0.00018;
-const STEP_SECONDS = 600;
-const BASE_TIME = 1000000000;
-
-function normalizeTime(t) {
-  return t - BASE_TIME;
-}
-
-function getCurrentTimeSec() {
+function getNow() {
   return Math.floor(Date.now() / 1000);
 }
 
-// ============================================================
-// WEATHER CORE
-// ============================================================
-function sampleAt(t) {
-  t = normalizeTime(t);
+function getT(now, i, dayOffsetSec = 0) {
+  return (now - dayOffsetSec) - (i * STEP_SECONDS);
+}
 
+// ============================================================
+// WEATHER CORE (MATCH WEB)
+// ============================================================
+function sampleWeatherAtTime(t) {
   let intensity = noise(t * NOISE_FACTOR) * 0.5;
-  let humidity  = noise(t * NOISE_FACTOR, 123.4567) * 0.5 + 0.5;
+  let humidity = noise(t * NOISE_FACTOR, 123.4567) * 0.5 + 1.35;
 
   intensity = Math.max(0, Math.min(1, intensity));
-  humidity  = Math.max(0, Math.min(1, humidity));
+  humidity = Math.max(0, Math.min(1, humidity));
 
   return { intensity, humidity };
 }
 
 function isStorm(t) {
-  const { intensity, humidity } = sampleAt(t);
+  const { intensity, humidity } = sampleWeatherAtTime(t);
   return intensity > 0.65 && humidity > 0.75;
 }
 
 // ============================================================
-// NEXT STORM (FIXED)
+// STORM SEARCH (FIXED)
 // ============================================================
 function findNextStormStart(searchHours = 168) {
-  const now = getCurrentTimeSec();
+  const now = getNow();
   const steps = Math.floor((searchHours * 3600) / STEP_SECONDS);
 
-  let i = 0;
-
-  while (i < steps && isStorm(now + i * STEP_SECONDS)) i++;
-
-  while (i < steps) {
-    const t = now + i * STEP_SECONDS;
-    if (isStorm(t)) return t;
-    i++;
+  for (let i = 0; i < steps; i++) {
+    const t = getT(now, i);
+    if (isStorm(t)) return now + i * STEP_SECONDS;
   }
 
   return null;
@@ -139,7 +133,7 @@ function findStormDuration(startTimestamp, maxHours = 72) {
   let duration = 0;
 
   for (let i = 0; i < steps; i++) {
-    const t = startTimestamp + i * STEP_SECONDS;
+    const t = getT(startTimestamp, i);
     if (!isStorm(t)) break;
     duration += STEP_SECONDS;
   }
@@ -148,72 +142,123 @@ function findStormDuration(startTimestamp, maxHours = 72) {
 }
 
 // ============================================================
-// FORMAT
+// CURRENT WEATHER TYPE (WEB MATCH)
 // ============================================================
-function formatDuration(seconds) {
-  if (!seconds) return "0m";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return `${h ? h + "h " : ""}${m ? m + "m" : ""}`.trim();
+function getWeatherTypeForDay(dayOffset = 0) {
+  const now = getNow();
+  const samples = [];
+
+  for (let i = 0; i < 144; i++) {
+    const t = getT(now, i, dayOffset * 86400);
+    samples.push(sampleWeatherAtTime(t));
+  }
+
+  const avgI = samples.reduce((a, b) => a + b.intensity, 0) / samples.length;
+  const avgH = samples.reduce((a, b) => a + b.humidity, 0) / samples.length;
+
+  if (avgI < 0.2 && avgH < 0.5) return { type: "Clear Skies", emoji: "☀️" };
+  if (avgI < 0.6 && avgH < 0.5) return { type: "Partially Cloudy", emoji: "⛅" };
+  if (avgI < 0.65 || avgH < 0.75) return { type: "Overcast", emoji: "☁️" };
+  if (avgI < 0.65 && avgH < 0.75) return { type: "Rainy", emoji: "🌧️" };
+  return { type: "Snowy", emoji: "❄️" };
+}
+
+function getWeekForecast() {
+  const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const now = getNow();
+  const results = [];
+
+  for (let d = 0; d < 7; d++) {
+    const samples = [];
+
+    for (let i = 0; i < 144; i++) {
+      const t = getT(now, i, d * 86400);
+      samples.push(sampleWeatherAtTime(t));
+    }
+
+    const avgI = samples.reduce((a,b)=>a+b.intensity,0)/samples.length;
+    const avgH = samples.reduce((a,b)=>a+b.humidity,0)/samples.length;
+
+    let type, emoji;
+
+    if (avgI < 0.2 && avgH < 0.5) { type="Clear"; emoji="☀️"; }
+    else if (avgI < 0.6 && avgH < 0.5) { type="P.Cloudy"; emoji="⛅"; }
+    else if (avgI < 0.65 || avgH < 0.75) { type="Overcast"; emoji="☁️"; }
+    else if (avgI < 0.65 && avgH < 0.75) { type="Rainy"; emoji="🌧️"; }
+    else { type="Stormy"; emoji="⛈️"; }
+
+    results.push({
+      dayName: days[new Date((now + d * 86400) * 1000).getDay()],
+      type,
+      emoji
+    });
+  }
+
+  return results;
 }
 
 // ============================================================
-// CLIENT
+// DISCORD BOT
 // ============================================================
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 const commands = [
   new SlashCommandBuilder().setName("nextstorm").setDescription("Next storm"),
-  new SlashCommandBuilder().setName("weather").setDescription("Weather"),
-  new SlashCommandBuilder().setName("forecast").setDescription("Forecast"),
+  new SlashCommandBuilder().setName("weather").setDescription("Current weather"),
+  new SlashCommandBuilder().setName("forecast").setDescription("7 day forecast"),
   new SlashCommandBuilder().setName("stormcheck").setDescription("Storm check"),
 ].map(c => c.toJSON());
 
-async function registerCommands() {
+async function register() {
   const rest = new REST({ version: "10" }).setToken(TOKEN);
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: commands }
-  );
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
 }
 
-client.once("ready", () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  registerCommands();
+client.once("ready", async () => {
+  console.log("Logged in:", client.user.tag);
+  await register();
 });
 
-client.on("interactionCreate", async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-  await interaction.deferReply();
+client.on("interactionCreate", async (i) => {
+  if (!i.isChatInputCommand()) return;
+  await i.deferReply();
 
-  const now = getCurrentTimeSec();
-
-  if (interaction.commandName === "nextstorm") {
+  if (i.commandName === "nextstorm") {
     const start = findNextStormStart();
-    if (!start) return interaction.editReply("No storm found");
 
-    const dur = findStormDuration(start);
+    if (!start) return i.editReply("No storms in range.");
 
-    return interaction.editReply(
-      `⛈️ Next storm <t:${start}:R>\nDuration: ${formatDuration(dur)}`
+    const duration = findStormDuration(start);
+    const end = start + duration;
+
+    return i.editReply(
+      `⛈️ Next storm:\nStarts: <t:${start}:R>\nEnds: <t:${end}:R>\nDuration: ${Math.floor(duration/3600)}h`
     );
   }
 
-  if (interaction.commandName === "stormcheck") {
-    return interaction.editReply(
-      isStorm(now)
-        ? "⛈️ Storm active"
-        : "☀️ No storm"
+  if (i.commandName === "weather") {
+    const { type, emoji } = getWeatherTypeForDay(0);
+    return i.editReply(`${emoji} ${type}`);
+  }
+
+  if (i.commandName === "forecast") {
+    const forecast = getWeekForecast();
+    return i.editReply(
+      forecast.map(f => `${f.emoji} ${f.dayName} - ${f.type}`).join("\n")
     );
   }
 
-  if (interaction.commandName === "weather") {
-    const w = sampleAt(now);
-    return interaction.editReply(`Intensity: ${w.intensity.toFixed(2)}`);
-  }
+  if (i.commandName === "stormcheck") {
+    const now = getNow();
+    const storm = isStorm(now);
 
-  if (interaction.commandName === "forecast") {
-    return interaction.editReply("Forecast system simplified in this build.");
+    if (storm) {
+      const duration = findStormDuration(now);
+      return i.editReply(`⛈️ Storm active (${Math.floor(duration/3600)}h left)`);
+    }
+
+    const next = findNextStormStart();
+    return i.editReply(`Next storm: <t:${next}:R>`);
   }
 });
 
