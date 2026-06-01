@@ -287,7 +287,28 @@ client.on("interactionCreate", async interaction => {
   // /nextstorm
   // ----------------------------------------------------------
   if (commandName === "nextstorm") {
+    // ---- DEBUG LOGGING ----
+    const _dbgNow     = getCurrentTimeSec();
+    const _dbgElapsed = _dbgNow - SEED;
+    console.log("[nextstorm] now =", _dbgNow, "| elapsed (now - SEED) =", _dbgElapsed);
+    console.log("[nextstorm] SEED =", SEED, "| STEP_SECONDS =", STEP_SECONDS);
+    console.log("[nextstorm] Sampling first 10 probe points:");
+    for (let _i = 0; _i < 10; _i++) {
+      const _t   = ((_dbgElapsed + SEED) * _i) * STEP_SECONDS;
+      const _s   = sampleAt(_t);
+      const _hit = isStorm(_t);
+      console.log(
+        `  [i=${_i}] t=${_t} | intensity=${_s.intensity.toFixed(6)} | humidity=${_s.humidity.toFixed(6)} | isStorm=${_hit}`
+      );
+    }
+    const _dbgSearchHours  = 168;
+    const _dbgMaxSeconds   = _dbgSearchHours * 3600;
+    const _dbgSteps        = Math.floor(_dbgMaxSeconds / STEP_SECONDS);
+    console.log("[nextstorm] Total steps to search:", _dbgSteps, "(searchHours=" + _dbgSearchHours + ", STEP_SECONDS=" + STEP_SECONDS + ")");
+    // ---- END DEBUG LOGGING ----
+
     const stormStart = findNextStormStart(168); // search 7 days
+    console.log("[nextstorm] findNextStormStart result:", stormStart);
 
     if (!stormStart) {
       return interaction.editReply({
