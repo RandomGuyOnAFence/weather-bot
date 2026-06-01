@@ -113,15 +113,16 @@ function isStorm(t) {
 }
 
 // ============================================================
-// STORM FUNCTIONS (1:1)
+// STORM FUNCTIONS (FIXED)
 // ============================================================
 function findNextStormStart(hours = 168) {
   const now = nowSec();
   const steps = Math.floor((hours * 3600) / STEP_SECONDS);
 
   for (let i = 0; i < steps; i++) {
-    const t = (now - SEED) - (i * STEP_SECONDS);
-    if (isStorm(t)) return now + (i * STEP_SECONDS);
+    // Stepping forward into the future, dropping the SEED mismatch
+    const t = now + (i * STEP_SECONDS);
+    if (isStorm(t)) return t;
   }
 
   return null;
@@ -132,7 +133,8 @@ function findStormDuration(start, hours = 72) {
   let duration = 0;
 
   for (let i = 0; i < steps; i++) {
-    const t = (start - SEED) - (i * STEP_SECONDS);
+    // Stepping forward from the found storm start time
+    const t = start + (i * STEP_SECONDS);
     if (!isStorm(t)) break;
     duration += STEP_SECONDS;
   }
@@ -141,7 +143,7 @@ function findStormDuration(start, hours = 72) {
 }
 
 // ============================================================
-// DEBUG TOOL (PARITY CHECKER)
+// DEBUG TOOL (PARITY CHECKER FIXED)
 // ============================================================
 function debugStormParity(samples = 25) {
   const now = nowSec();
@@ -150,7 +152,8 @@ function debugStormParity(samples = 25) {
   console.log("i | t | intensity | humidity | storm");
 
   for (let i = 0; i < samples; i++) {
-    const t = (now - SEED) - (i * STEP_SECONDS);
+    // Match the forward-stepping forecast behavior
+    const t = now + (i * STEP_SECONDS);
     const s = sampleAt(t);
     const storm = isStorm(t);
 
