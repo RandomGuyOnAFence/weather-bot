@@ -1,8 +1,10 @@
 # 1. Use the official Node.js image (Lightweight version)
 FROM node:20-bookworm-slim
 
-# 2. Update Linux and forcefully install FFmpeg
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+# 2. Install FFmpeg AND the C++ build tools required by Discord's audio engine
+RUN apt-get update && \
+    apt-get install -y ffmpeg make g++ python3 build-essential && \
+    rm -rf /var/lib/apt/lists/*
 
 # 3. Create a working directory for the bot
 WORKDIR /app
