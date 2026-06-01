@@ -149,7 +149,7 @@ function findStormDuration(startTimestamp, maxHours = 72) {
   let   duration   = 0;
 
   for (let i = 0; i < steps; i++) {
-    const t = (startTimestamp - getCurrentTimeSec()) - SEED + i * STEP_SECONDS;
+    const t = startTimestamp - SEED + i * STEP_SECONDS;
     if (!isStorm(t)) break;
     duration += STEP_SECONDS;
   }
