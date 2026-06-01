@@ -115,14 +115,15 @@ function findNextStormStart(searchHours = 168) { // search 7 days ahead
   const now        = getCurrentTimeSec();
   const maxSeconds = searchHours * 3600;
   const steps      = Math.floor(maxSeconds / STEP_SECONDS);
+  const elapsed    = now - SEED;
 
   // If we are currently in a storm, skip past it first
   let i = 0;
-  while (i < steps && isStorm(now - SEED + i * STEP_SECONDS)) i++;
+  while (i < steps && isStorm((elapsed + SEED) * i * STEP_SECONDS)) i++;
 
   // Now find where the next storm begins
   while (i < steps) {
-    const t = now - SEED + i * STEP_SECONDS;
+    const t = (elapsed + SEED) * i * STEP_SECONDS;
     if (isStorm(t)) {
       // Refine: walk back to find exact start within this step
       for (let s = STEP_SECONDS; s >= 60; s = Math.floor(s / 2)) {
@@ -148,13 +149,12 @@ function findStormDuration(startTimestamp, maxHours = 72) {
   const steps      = Math.floor(maxSeconds / STEP_SECONDS);
   let   duration   = 0;
 
-  // Mirror the web script's approach: derive elapsed from the current Unix
-  // timestamp and SEED, then use (elapsed + SEED) as the base so that t
-  // advances purely by step offsets — matching the original algorithm.
+  // Mirror the web script's multiplicative approach: elapsed is derived from
+  // the storm start timestamp and SEED, then t = (elapsed + SEED) * i * STEP_SECONDS.
   const elapsed = startTimestamp - SEED;
 
   for (let i = 0; i < steps; i++) {
-    const t = (elapsed + SEED) + i * STEP_SECONDS;
+    const t = (elapsed + SEED) * i * STEP_SECONDS;
     if (!isStorm(t)) break;
     duration += STEP_SECONDS;
   }
