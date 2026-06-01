@@ -17,11 +17,11 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID  = process.env.GUILD_ID;
 
 // ============================================================
-// CONSTANTS (MATCH WEB EXACTLY)
+// CONSTANTS (MUST MATCH WEB)
 // ============================================================
 const SEED = -1753269629;
 const NOISE_FACTOR = 0.00018;
-const STEP_SECONDS = 600; // 10 min like web version
+const STEP_SECONDS = 600;
 
 // ============================================================
 // PERLIN NOISE (UNCHANGED)
@@ -77,12 +77,12 @@ function noise(x, y = 0, z = 0) {
 
   return lerp(w,
     lerp(v,
-      lerp(u, grad(perm[aa], x, y, z), grad(perm[ba], x-1, y, z)),
-      lerp(u, grad(perm[ab], x, y-1, z), grad(perm[bb], x-1, y-1, z))
+      lerp(u, grad(perm[aa], x, y, z), grad(perm[ba], x - 1, y, z)),
+      lerp(u, grad(perm[ab], x, y - 1, z), grad(perm[bb], x - 1, y - 1, z))
     ),
     lerp(v,
-      lerp(u, grad(perm[aa+1], x, y, z-1), grad(perm[ba+1], x-1, y, z-1)),
-      lerp(u, grad(perm[ab+1], x, y-1, z-1), grad(perm[bb+1], x-1, y-1, z-1))
+      lerp(u, grad(perm[aa + 1], x, y, z - 1), grad(perm[ba + 1], x - 1, y, z - 1)),
+      lerp(u, grad(perm[ab + 1], x, y - 1, z - 1), grad(perm[bb + 1], x - 1, y - 1, z - 1))
     )
   );
 }
@@ -91,15 +91,15 @@ function noise(x, y = 0, z = 0) {
 // TIME
 // ============================================================
 function nowSec() {
-  return Math.floor(Date.now() / 1000);
+  return Date.now() / 1000;
 }
 
 // ============================================================
-// WEB-ACCURATE SAMPLING
+// 1:1 WEB WEATHER SAMPLE
 // ============================================================
 function sampleAt(t) {
   let intensity = noise(t * NOISE_FACTOR) * 0.5;
-  let humidity  = noise(t * NOISE_FACTOR, 123.4567) * 0.5 + 1.35;
+  let humidity  = Math.round(noise(t * NOISE_FACTOR, 123.4567) * 0.5 + 1.35);
 
   intensity = Math.max(0, Math.min(1, intensity));
   humidity  = Math.max(0, Math.min(1, humidity));
@@ -108,36 +108,40 @@ function sampleAt(t) {
 }
 
 function isStorm(t) {
-  const s = sampleAt(t);
-  return s.intensity > 0.65 && s.humidity > 0.75;
+  const { intensity, humidity } = sampleAt(t);
+  return intensity > 0.65 && humidity > 0.75;
 }
 
 // ============================================================
-// FIXED STORM SEARCH (LINEAR LIKE WEB)
+// 1:1 NEXT STORM (FIXED)
 // ============================================================
-function findNextStormStart(hours = 168) {
+function findNextStormStart(searchHours = 168) {
   const now = nowSec();
-  const steps = (hours * 3600) / STEP_SECONDS;
+  const steps = Math.floor((searchHours * 3600) / STEP_SECONDS);
 
   for (let i = 0; i < steps; i++) {
     const t = (now - SEED) - (i * STEP_SECONDS);
+
     if (isStorm(t)) {
       return now + (i * STEP_SECONDS);
     }
   }
+
   return null;
 }
 
 // ============================================================
-// STORM DURATION (FIXED)
+// 1:1 STORM DURATION
 // ============================================================
-function findStormDuration(start, maxHours = 72) {
-  const steps = (maxHours * 3600) / STEP_SECONDS;
+function findStormDuration(startTimestamp, maxHours = 72) {
+  const steps = Math.floor((maxHours * 3600) / STEP_SECONDS);
   let duration = 0;
 
   for (let i = 0; i < steps; i++) {
-    const t = (start - SEED) - (i * STEP_SECONDS);
+    const t = (startTimestamp - SEED) - (i * STEP_SECONDS);
+
     if (!isStorm(t)) break;
+
     duration += STEP_SECONDS;
   }
 
@@ -145,21 +149,14 @@ function findStormDuration(start, maxHours = 72) {
 }
 
 // ============================================================
-// FORMAT
-// ============================================================
-function formatDuration(sec) {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  return `${h}h ${m}m`;
-}
-
-// ============================================================
-// DISCORD SETUP
+// DISCORD BOT
 // ============================================================
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 const commands = [
-  new SlashCommandBuilder().setName("nextstorm").setDescription("Next storm"),
+  new SlashCommandBuilder()
+    .setName("nextstorm")
+    .setDescription("Shows next storm"),
 ].map(c => c.toJSON());
 
 async function register() {
@@ -170,17 +167,11 @@ async function register() {
   );
 }
 
-// ============================================================
-// READY
-// ============================================================
 client.once("ready", async () => {
   console.log("Logged in:", client.user.tag);
   await register();
 });
 
-// ============================================================
-// COMMAND
-// ============================================================
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
   if (i.commandName !== "nextstorm") return;
@@ -190,21 +181,18 @@ client.on("interactionCreate", async (i) => {
   const stormStart = findNextStormStart(168);
 
   if (!stormStart) {
-    return i.editReply("⛅ No storms in range (7 days).");
+    return i.editReply("⛅ No storms in range.");
   }
 
   const duration = findStormDuration(stormStart);
   const stormEnd = stormStart + duration;
 
   return i.editReply(
-    `⛈️ Next storm:\n` +
+    `⛈️ Next Storm:\n` +
     `Start: <t:${stormStart}:R>\n` +
     `End: <t:${stormEnd}:R>\n` +
-    `Duration: ${formatDuration(duration)}`
+    `Duration: ${Math.floor(duration / 3600)}h`
   );
 });
 
-// ============================================================
-// LOGIN
-// ============================================================
 client.login(TOKEN);
