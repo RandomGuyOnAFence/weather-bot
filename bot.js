@@ -24,7 +24,7 @@ const NOISE_FACTOR = 0.00018;
 const STEP_SECONDS = 5; // The web script scans in 5-second intervals
 
 // ============================================================
-// PERLIN NOISE (UNCHANGED)
+// PERLIN NOISE
 // ============================================================
 const permutation = [
   151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,140,36,103,30,69,
@@ -114,22 +114,22 @@ function isStorm(t) {
 // ============================================================
 // STORM FUNCTIONS
 // ============================================================
-function findNextStormStart(hours = 72) {
-  const now = nowSec();
+function findNextStormStart(startTime = nowSec(), hours = 168) {
+  // We scan up to 168 hours (7 days) ahead to ensure we don't miss distant storms
   const steps = (hours * 3600) / STEP_SECONDS;
 
   for (let i = 1; i <= steps; i++) {
     // Exact match for the web script's M() function time calculation
-    const t = now + SEED + (i * STEP_SECONDS);
+    const t = startTime + SEED + (i * STEP_SECONDS);
     if (isStorm(t)) {
-      return now + (i * STEP_SECONDS); // Return real-world unix timestamp
+      return startTime + (i * STEP_SECONDS); // Return real-world unix timestamp
     }
   }
 
   return null;
 }
 
-function findStormDuration(startUnix, hours = 12) {
+function findStormDuration(startUnix, hours = 24) {
   const steps = (hours * 3600) / STEP_SECONDS;
   let duration = 0;
 
@@ -180,7 +180,16 @@ const commands = [
     .setDescription("Find next storm"),
   new SlashCommandBuilder()
     .setName("debugstorm")
-    .setDescription("Print storm parity debug logs")
+    .setDescription("Print storm parity debug logs"),
+  new SlashCommandBuilder()
+    .setName("storms")
+    .setDescription("Find multiple upcoming storms")
+    .addIntegerOption(option => 
+      option.setName("count")
+        .setDescription("How many storms to find (1-10)")
+        .setMinValue(1)
+        .setMaxValue(10)
+    )
 ].map(c => c.toJSON());
 
 async function register() {
@@ -204,28 +213,66 @@ client.on("interactionCreate", async (i) => {
     return i.reply("📊 Debug printed to console.");
   }
 
-  if (i.commandName !== "nextstorm") return;
+  if (i.commandName === "nextstorm") {
+    await i.deferReply();
 
-  await i.deferReply();
+    const stormStart = findNextStormStart();
 
-  const stormStart = findNextStormStart();
+    if (!stormStart) {
+      return i.editReply("⛅ No storms in range (Checked next 7 days).");
+    }
 
-  if (!stormStart) {
-    return i.editReply("⛅ No storms in range (Checked next 72 hours).");
+    const duration = findStormDuration(stormStart);
+    const end = stormStart + duration;
+    
+    const dHours = Math.floor(duration / 3600);
+    const dMins = Math.floor((duration % 3600) / 60);
+
+    return i.editReply(
+      `⛈️ **Next Storm Details:**\n` +
+      `**Starts:** <t:${stormStart}:R>\n` +
+      `**Ends:** <t:${end}:R>\n` +
+      `**Duration:** ${dHours}h ${dMins}m`
+    );
   }
 
-  const duration = findStormDuration(stormStart);
-  const end = stormStart + duration;
-  
-  const dHours = Math.floor(duration / 3600);
-  const dMins = Math.floor((duration % 3600) / 60);
+  if (i.commandName === "storms") {
+    await i.deferReply();
+    
+    const count = i.options.getInteger("count") || 3;
+    let searchStart = nowSec();
+    let stormsFound = [];
 
-  return i.editReply(
-    `⛈️ **Next Storm Details:**\n` +
-    `**Starts:** <t:${stormStart}:R>\n` +
-    `**Ends:** <t:${end}:R>\n` +
-    `**Duration:** ${dHours}h ${dMins}m`
-  );
+    for (let j = 0; j < count; j++) {
+      const start = findNextStormStart(searchStart, 168);
+      
+      if (!start) break; 
+      
+      const duration = findStormDuration(start, 24);
+      const end = start + duration;
+      
+      stormsFound.push({ start, end, duration });
+      
+      searchStart = end + STEP_SECONDS; 
+    }
+
+    if (stormsFound.length === 0) {
+      return i.editReply("⛅ No storms found in the foreseeable future.");
+    }
+
+    let reply = `⛈️ **Next ${stormsFound.length} Storm(s):**\n\n`;
+    
+    stormsFound.forEach((s, idx) => {
+      const dHours = Math.floor(s.duration / 3600);
+      const dMins = Math.floor((s.duration % 3600) / 60);
+      const durStr = dHours > 0 ? `${dHours}h ${dMins}m` : `${dMins}m`;
+      
+      reply += `**${idx + 1}.** <t:${s.start}:F> (<t:${s.start}:R>)\n`;
+      reply += `└ **Ends:** <t:${s.end}:t> | **Duration:** ${durStr}\n\n`;
+    });
+
+    return i.editReply(reply);
+  }
 });
 
 client.login(TOKEN);
