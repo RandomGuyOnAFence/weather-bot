@@ -17,11 +17,11 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID  = process.env.GUILD_ID;
 
 // ============================================================
-// CONSTANTS (WEB MATCH)
+// CONSTANTS (1:1 WEB MATCH)
 // ============================================================
 const SEED = -1753269629;
 const NOISE_FACTOR = 0.00018;
-const STEP_SECONDS = 600;
+const STEP_SECONDS = 5; // The web script scans in 5-second intervals
 
 // ============================================================
 // PERLIN NOISE (UNCHANGED)
@@ -87,54 +87,55 @@ function noise(x, y = 0, z = 0) {
   );
 }
 
-// ============================================================
-// TIME
-// ============================================================
 function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
 
 // ============================================================
-// WEATHER ENGINE (1:1)
+// WEATHER ENGINE (FIXED TO EXACT WEB MATH)
 // ============================================================
 function sampleAt(t) {
-  let intensity = noise(t * NOISE_FACTOR) * 0.5;
-  let humidity  = Math.round(noise(t * NOISE_FACTOR, 123.4567) * 0.5 + 1.35);
+  let intensity = noise(t * NOISE_FACTOR) + 0.5;
+  let humidity  = Math.pow(noise(t * NOISE_FACTOR, 123.4567) + 0.5, 1.35);
 
-  intensity = Math.max(0, Math.min(1, intensity));
-  humidity  = Math.max(0, Math.min(1, humidity));
+  // Web script clamps the humidity to prevent weird JS errors
+  if (!isFinite(humidity) || isNaN(humidity)) humidity = 0;
+  
+  humidity = Math.max(0, Math.min(1, humidity));
 
   return { intensity, humidity };
 }
 
 function isStorm(t) {
   const s = sampleAt(t);
-  return s.intensity > 0.65 && s.humidity > 0.75;
+  return s.intensity >= 0.65 && s.humidity >= 0.75;
 }
 
 // ============================================================
-// STORM FUNCTIONS (FIXED)
+// STORM FUNCTIONS
 // ============================================================
-function findNextStormStart(hours = 168) {
+function findNextStormStart(hours = 72) {
   const now = nowSec();
-  const steps = Math.floor((hours * 3600) / STEP_SECONDS);
+  const steps = (hours * 3600) / STEP_SECONDS;
 
-  for (let i = 0; i < steps; i++) {
-    // Stepping forward into the future, dropping the SEED mismatch
-    const t = now + (i * STEP_SECONDS);
-    if (isStorm(t)) return t;
+  for (let i = 1; i <= steps; i++) {
+    // Exact match for the web script's M() function time calculation
+    const t = now + SEED + (i * STEP_SECONDS);
+    if (isStorm(t)) {
+      return now + (i * STEP_SECONDS); // Return real-world unix timestamp
+    }
   }
 
   return null;
 }
 
-function findStormDuration(start, hours = 72) {
-  const steps = Math.floor((hours * 3600) / STEP_SECONDS);
+function findStormDuration(startUnix, hours = 12) {
+  const steps = (hours * 3600) / STEP_SECONDS;
   let duration = 0;
 
-  for (let i = 0; i < steps; i++) {
-    // Stepping forward from the found storm start time
-    const t = start + (i * STEP_SECONDS);
+  for (let i = 1; i <= steps; i++) {
+    // Exact match for the web script's f() function time calculation
+    const t = startUnix + SEED + (i * STEP_SECONDS);
     if (!isStorm(t)) break;
     duration += STEP_SECONDS;
   }
@@ -143,29 +144,24 @@ function findStormDuration(start, hours = 72) {
 }
 
 // ============================================================
-// DEBUG TOOL (PARITY CHECKER FIXED)
+// DEBUG TOOL
 // ============================================================
 function debugStormParity(samples = 25) {
   const now = nowSec();
 
   console.log("\n========== STORM PARITY DEBUG ==========\n");
-  console.log("i | t | intensity | humidity | storm");
+  console.log("i | Real Time | Internal (t) | Intensity | Humidity | Storm");
 
   for (let i = 0; i < samples; i++) {
-    // Match the forward-stepping forecast behavior
-    const t = now + (i * STEP_SECONDS);
+    const realTime = now + (i * 600); // Sample every 10 mins
+    const t = realTime + SEED;
     const s = sampleAt(t);
     const storm = isStorm(t);
 
     console.log(
-      i,
-      "|",
-      t,
-      "|",
-      s.intensity.toFixed(3),
-      "|",
-      s.humidity.toFixed(3),
-      "|",
+      i, "|", realTime, "|", t, "|",
+      s.intensity.toFixed(3), "|",
+      s.humidity.toFixed(3), "|",
       storm ? "YES" : "NO"
     );
   }
@@ -215,17 +211,20 @@ client.on("interactionCreate", async (i) => {
   const stormStart = findNextStormStart();
 
   if (!stormStart) {
-    return i.editReply("⛅ No storms in range.");
+    return i.editReply("⛅ No storms in range (Checked next 72 hours).");
   }
 
   const duration = findStormDuration(stormStart);
   const end = stormStart + duration;
+  
+  const dHours = Math.floor(duration / 3600);
+  const dMins = Math.floor((duration % 3600) / 60);
 
   return i.editReply(
-    `⛈️ Next storm:\n` +
-    `Start: <t:${stormStart}:R>\n` +
-    `End: <t:${end}:R>\n` +
-    `Duration: ${Math.floor(duration / 3600)}h`
+    `⛈️ **Next Storm Details:**\n` +
+    `**Starts:** <t:${stormStart}:R>\n` +
+    `**Ends:** <t:${end}:R>\n` +
+    `**Duration:** ${dHours}h ${dMins}m`
   );
 });
 
