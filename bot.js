@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, MessageFlags } = require("discord.js");
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
 const path = require('path');
 const fs = require('fs');
@@ -8,7 +8,6 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const TARGET_CHANNEL_ID = "1510862057900347483";
 const VOICE_CHANNEL_ID = process.env.VOICE_CHANNEL_ID;
-const TEST_MODE = true; 
 
 const SEED = -1753269629;
 const NOISE_FACTOR = 0.00018;
@@ -54,16 +53,10 @@ let lastWeatherState = false;
 
 async function playStormAudio() {
     try {
-        if (!VOICE_CHANNEL_ID) {
-            console.error("VOICE_CHANNEL_ID is not defined in environment variables.");
-            return;
-        }
+        if (!VOICE_CHANNEL_ID) return;
 
         const channel = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
-        if (!channel) {
-            console.error("Could not fetch the voice channel. Check permissions and VOICE_CHANNEL_ID.");
-            return;
-        }
+        if (!channel) return;
         
         const connection = joinVoiceChannel({ 
             channelId: channel.id, 
@@ -86,44 +79,49 @@ async function playStormAudio() {
             const resource = createAudioResource(filePath);
             connection.subscribe(player);
             player.play(resource);
+            
+            // Bot leaves the channel when the audio finishes
             player.on(AudioPlayerStatus.Idle, () => connection.destroy());
         } else {
-            console.error("Audio file does not exist at path:", filePath);
             connection.destroy();
         }
     } catch (error) {
-        console.error("Critical error in playStormAudio:", error);
+        console.error("Error in playStormAudio:", error);
     }
 }
 
 client.once("ready", async () => {
+    // Only registering the /nextstorm command now
     const commands = [new SlashCommandBuilder().setName("nextstorm").setDescription("Find next storm")];
-    if (TEST_MODE) commands.push(new SlashCommandBuilder().setName("teststorm").setDescription("Trigger audio test"));
     const rest = new REST({ version: "10" }).setToken(TOKEN);
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log("Bot started successfully.");
+    console.log("Bot started successfully. Waiting for storms...");
 });
 
 client.on("interactionCreate", async (i) => {
     if (!i.isChatInputCommand()) return;
-    if (i.commandName === "teststorm") {
-        await i.deferReply({ ephemeral: true });
-        await playStormAudio();
-        return i.editReply({ content: "🔊 Check logs if audio fails." });
-    }
     
-    await i.deferReply({ ephemeral: true });
-    const targetChannel = await client.channels.fetch(TARGET_CHANNEL_ID).catch(() => null);
-    if (!targetChannel) return i.editReply("Error: target channel not found.");
-    const start = findNextStormStart();
-    const response = start ? `⛈️ Next Storm: <t:${start}:R>` : "⛅ No storms.";
-    await targetChannel.send(response);
-    await i.editReply(`✅`);
+    if (i.commandName === "nextstorm") {
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const targetChannel = await client.channels.fetch(TARGET_CHANNEL_ID).catch(() => null);
+        if (!targetChannel) return i.editReply("Error: target channel not found.");
+        
+        const start = findNextStormStart();
+        const response = start ? `⛈️ Next Storm: <t:${start}:R>` : "⛅ No storms.";
+        await targetChannel.send(response);
+        await i.editReply(`✅`);
+    }
 });
 
+// The core loop: Checks every 5 seconds if a storm just started
 setInterval(async () => {
     const isNowStormy = isStorm(nowSec());
-    if (isNowStormy && !lastWeatherState) await playStormAudio();
+    
+    // If it is stormy now, but wasn't 5 seconds ago -> The storm just started!
+    if (isNowStormy && !lastWeatherState) {
+        await playStormAudio();
+    }
+    
     lastWeatherState = isNowStormy;
 }, 5000);
 
