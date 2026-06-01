@@ -53,24 +53,46 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 let lastWeatherState = false;
 
 async function playStormAudio() {
-    const channel = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
-    if (!channel) return;
-    
-    const connection = joinVoiceChannel({ 
-        channelId: channel.id, 
-        guildId: channel.guild.id, 
-        adapterCreator: channel.guild.voiceAdapterCreator 
-    });
-    
-    const player = createAudioPlayer();
-    const files = ['ZeusLightningStart1.ogg', 'ZeusLightningStart2.ogg'];
-    const filePath = path.join(__dirname, 'Audios', files[Math.floor(Math.random() * files.length)]);
-    
-    if (fs.existsSync(filePath)) {
-        const resource = createAudioResource(filePath);
-        connection.subscribe(player);
-        player.play(resource);
-        player.on(AudioPlayerStatus.Idle, () => connection.destroy());
+    try {
+        if (!VOICE_CHANNEL_ID) {
+            console.error("VOICE_CHANNEL_ID is not defined in environment variables.");
+            return;
+        }
+
+        const channel = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
+        if (!channel) {
+            console.error("Could not fetch the voice channel. Check permissions and VOICE_CHANNEL_ID.");
+            return;
+        }
+        
+        const connection = joinVoiceChannel({ 
+            channelId: channel.id, 
+            guildId: channel.guild.id, 
+            adapterCreator: channel.guild.voiceAdapterCreator 
+        });
+
+        connection.on('error', (err) => console.error("Connection Error:", err.message));
+        
+        const player = createAudioPlayer();
+        player.on('error', (err) => {
+            console.error("Audio Player Error:", err.message);
+            connection.destroy();
+        });
+
+        const files = ['ZeusLightningStart1.ogg', 'ZeusLightningStart2.ogg'];
+        const filePath = path.join(__dirname, 'Audios', files[Math.floor(Math.random() * files.length)]);
+        
+        if (fs.existsSync(filePath)) {
+            const resource = createAudioResource(filePath);
+            connection.subscribe(player);
+            player.play(resource);
+            player.on(AudioPlayerStatus.Idle, () => connection.destroy());
+        } else {
+            console.error("Audio file does not exist at path:", filePath);
+            connection.destroy();
+        }
+    } catch (error) {
+        console.error("Critical error in playStormAudio:", error);
     }
 }
 
@@ -79,17 +101,20 @@ client.once("ready", async () => {
     if (TEST_MODE) commands.push(new SlashCommandBuilder().setName("teststorm").setDescription("Trigger audio test"));
     const rest = new REST({ version: "10" }).setToken(TOKEN);
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    console.log("Bot started successfully.");
 });
 
 client.on("interactionCreate", async (i) => {
     if (!i.isChatInputCommand()) return;
     if (i.commandName === "teststorm") {
+        await i.deferReply({ ephemeral: true });
         await playStormAudio();
-        return i.reply({ content: "🔊", ephemeral: true });
+        return i.editReply({ content: "🔊 Check logs if audio fails." });
     }
+    
     await i.deferReply({ ephemeral: true });
     const targetChannel = await client.channels.fetch(TARGET_CHANNEL_ID).catch(() => null);
-    if (!targetChannel) return i.editReply("Error.");
+    if (!targetChannel) return i.editReply("Error: target channel not found.");
     const start = findNextStormStart();
     const response = start ? `⛈️ Next Storm: <t:${start}:R>` : "⛅ No storms.";
     await targetChannel.send(response);
