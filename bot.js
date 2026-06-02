@@ -58,9 +58,17 @@ function findStormDuration(startTime, maxHours = 24) {
   return maxHours * 3600; 
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
+// Added GuildMessages intent so the bot can see when people ping it
+const client = new Client({ 
+    intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessages 
+    ] 
+});
 let lastWeatherState = false;
 
+// Function to play general storm audio
 async function playStormAudio() {
     try {
         if (!VOICE_CHANNEL_ID) return;
@@ -117,6 +125,63 @@ client.once("ready", async () => {
     console.log("Bot started successfully. Waiting for storms...");
 });
 
+// NEW: Event listener for messages (Detects pings)
+client.on("messageCreate", async (message) => {
+    // Ignore messages from bots
+    if (message.author.bot) return;
+
+    // Check if the bot was mentioned
+    if (message.mentions.has(client.user)) {
+        try {
+            // 1. Timeout the user for 60 seconds
+            // Note: The bot needs 'Moderate Members' permissions and must be higher in the role hierarchy than the user
+            if (message.member && message.member.moderatable) {
+                await message.member.timeout(60 * 1000, "Pinged the bot");
+                await message.reply({ content: "You have been timed out for 60 seconds.", flags: MessageFlags.Ephemeral });
+            } else {
+                await message.reply({ content: "I don't have permission to time you out, but don't ping me!", flags: MessageFlags.Ephemeral });
+            }
+
+            // 2. Play the warning audio
+            // Try to join the channel the user is currently in, otherwise default to the main voice channel
+            const targetVC = message.member.voice.channel || await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
+            
+            if (targetVC) {
+                const connection = joinVoiceChannel({
+                    channelId: targetVC.id,
+                    guildId: targetVC.guild.id,
+                    adapterCreator: targetVC.guild.voiceAdapterCreator
+                });
+
+                connection.on('error', (err) => console.error("Warning Audio Connection Error:", err.message));
+
+                const player = createAudioPlayer();
+                player.on('error', (err) => {
+                    console.error("Warning Audio Player Error:", err.message);
+                    connection.destroy();
+                });
+
+                // Play the specific warning audio file
+                const filePath = path.join(__dirname, 'Audios', 'WarningSpeach1.ogg');
+
+                if (fs.existsSync(filePath)) {
+                    const resource = createAudioResource(filePath);
+                    connection.subscribe(player);
+                    player.play(resource);
+                    
+                    // Leave when finished
+                    player.on(AudioPlayerStatus.Idle, () => connection.destroy());
+                } else {
+                    console.error("Warning audio file not found at:", filePath);
+                    connection.destroy();
+                }
+            }
+        } catch (error) {
+            console.error("Error handling bot ping:", error);
+        }
+    }
+});
+
 client.on("interactionCreate", async (i) => {
     if (!i.isChatInputCommand()) return;
     
@@ -159,7 +224,6 @@ client.on("interactionCreate", async (i) => {
 });
 
 setInterval(async () => {
-    // Math fix: Ensures the bot experiences the exact same weather as the predictor!
     const isNowStormy = isStorm(nowSec() + SEED); 
     
     if (isNowStormy && !lastWeatherState) {
