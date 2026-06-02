@@ -49,14 +49,13 @@ function findNextStormStart(startTime = nowSec(), hours = 168) {
   return null;
 }
 
-// NEW: Predicts how long a storm will last by stepping forward until isStorm returns false
 function findStormDuration(startTime, maxHours = 24) {
   const steps = (maxHours * 3600) / STEP_SECONDS;
   for (let i = 1; i <= steps; i++) {
     const t = startTime + SEED + (i * STEP_SECONDS);
-    if (!isStorm(t)) return i * STEP_SECONDS; // Return duration in seconds
+    if (!isStorm(t)) return i * STEP_SECONDS; 
   }
-  return maxHours * 3600; // Cap at maxHours if it doesn't seem to end
+  return maxHours * 3600; 
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
@@ -102,7 +101,6 @@ async function playStormAudio() {
 client.once("ready", async () => {
     const commands = [
         new SlashCommandBuilder().setName("nextstorm").setDescription("Find next storm"),
-        // NEW: The /storms command with a 'count' option
         new SlashCommandBuilder()
             .setName("storms")
             .setDescription("Find multiple upcoming storms")
@@ -111,7 +109,7 @@ client.once("ready", async () => {
                 .setDescription('How many future storms to predict (default 3)')
                 .setRequired(false)
                 .setMinValue(1)
-                .setMaxValue(10) // Prevents the bot from freezing by calculating too far out
+                .setMaxValue(10) 
             )
     ];
     const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -143,7 +141,6 @@ client.on("interactionCreate", async (i) => {
             const dur = findStormDuration(start, 24);
             results.push({ start, end: start + dur, dur });
             
-            // Move the search start time to after this storm ends + 1 step
             searchStart = start + dur + STEP_SECONDS;
         }
         
@@ -162,7 +159,9 @@ client.on("interactionCreate", async (i) => {
 });
 
 setInterval(async () => {
-    const isNowStormy = isStorm(nowSec());
+    // Math fix: Ensures the bot experiences the exact same weather as the predictor!
+    const isNowStormy = isStorm(nowSec() + SEED); 
+    
     if (isNowStormy && !lastWeatherState) {
         await playStormAudio();
     }
