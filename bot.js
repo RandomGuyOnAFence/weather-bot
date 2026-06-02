@@ -58,7 +58,6 @@ function findStormDuration(startTime, maxHours = 24) {
   return maxHours * 3600; 
 }
 
-// Added GuildMessages intent so the bot can see when people ping it
 const client = new Client({ 
     intents: [
         GatewayIntentBits.Guilds, 
@@ -68,7 +67,6 @@ const client = new Client({
 });
 let lastWeatherState = false;
 
-// Function to play general storm audio
 async function playStormAudio() {
     try {
         if (!VOICE_CHANNEL_ID) return;
@@ -125,16 +123,13 @@ client.once("ready", async () => {
     console.log("Bot started successfully. Waiting for storms...");
 });
 
-// NEW: Event listener for messages (Detects pings)
+// Event listener for messages (Detects pings)
 client.on("messageCreate", async (message) => {
-    // Ignore messages from bots
     if (message.author.bot) return;
 
-    // Check if the bot was mentioned
     if (message.mentions.has(client.user)) {
         try {
             // 1. Timeout the user for 60 seconds
-            // Note: The bot needs 'Moderate Members' permissions and must be higher in the role hierarchy than the user
             if (message.member && message.member.moderatable) {
                 await message.member.timeout(60 * 1000, "Pinged the bot");
                 await message.reply({ content: "You have been timed out for 60 seconds.", flags: MessageFlags.Ephemeral });
@@ -143,7 +138,6 @@ client.on("messageCreate", async (message) => {
             }
 
             // 2. Play the warning audio
-            // Try to join the channel the user is currently in, otherwise default to the main voice channel
             const targetVC = message.member.voice.channel || await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
             
             if (targetVC) {
@@ -161,15 +155,15 @@ client.on("messageCreate", async (message) => {
                     connection.destroy();
                 });
 
-                // Play the specific warning audio file
-                const filePath = path.join(__dirname, 'Audios', 'WarningSpeach1.ogg');
+                // NEW: Randomize between WarningSpeach1 and WarningSpeach2
+                const warningFiles = ['WarningSpeach1.ogg', 'WarningSpeach2.ogg'];
+                const selectedFile = warningFiles[Math.floor(Math.random() * warningFiles.length)];
+                const filePath = path.join(__dirname, 'Audios', selectedFile);
 
                 if (fs.existsSync(filePath)) {
                     const resource = createAudioResource(filePath);
                     connection.subscribe(player);
                     player.play(resource);
-                    
-                    // Leave when finished
                     player.on(AudioPlayerStatus.Idle, () => connection.destroy());
                 } else {
                     console.error("Warning audio file not found at:", filePath);
@@ -225,7 +219,6 @@ client.on("interactionCreate", async (i) => {
 
 setInterval(async () => {
     const isNowStormy = isStorm(nowSec() + SEED); 
-    
     if (isNowStormy && !lastWeatherState) {
         await playStormAudio();
     }
