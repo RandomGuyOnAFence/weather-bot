@@ -39,6 +39,7 @@ function sampleAt(t) {
   return { intensity, humidity: Math.max(0, Math.min(1, humidity)) };
 }
 function isStorm(t) { const s = sampleAt(t); return s.intensity >= 0.65 && s.humidity >= 0.75; }
+
 function findNextStormStart(startTime = nowSec(), hours = 168) {
   const steps = (hours * 3600) / STEP_SECONDS;
   for (let i = 1; i <= steps; i++) {
@@ -46,6 +47,16 @@ function findNextStormStart(startTime = nowSec(), hours = 168) {
     if (isStorm(t)) return startTime + (i * STEP_SECONDS);
   }
   return null;
+}
+
+// NEW: Predicts how long a storm will last by stepping forward until isStorm returns false
+function findStormDuration(startTime, maxHours = 24) {
+  const steps = (maxHours * 3600) / STEP_SECONDS;
+  for (let i = 1; i <= steps; i++) {
+    const t = startTime + SEED + (i * STEP_SECONDS);
+    if (!isStorm(t)) return i * STEP_SECONDS; // Return duration in seconds
+  }
+  return maxHours * 3600; // Cap at maxHours if it doesn't seem to end
 }
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
@@ -79,8 +90,6 @@ async function playStormAudio() {
             const resource = createAudioResource(filePath);
             connection.subscribe(player);
             player.play(resource);
-            
-            // Bot leaves the channel when the audio finishes
             player.on(AudioPlayerStatus.Idle, () => connection.destroy());
         } else {
             connection.destroy();
@@ -91,8 +100,20 @@ async function playStormAudio() {
 }
 
 client.once("ready", async () => {
-    // Only registering the /nextstorm command now
-    const commands = [new SlashCommandBuilder().setName("nextstorm").setDescription("Find next storm")];
+    const commands = [
+        new SlashCommandBuilder().setName("nextstorm").setDescription("Find next storm"),
+        // NEW: The /storms command with a 'count' option
+        new SlashCommandBuilder()
+            .setName("storms")
+            .setDescription("Find multiple upcoming storms")
+            .addIntegerOption(option => 
+                option.setName('count')
+                .setDescription('How many future storms to predict (default 3)')
+                .setRequired(false)
+                .setMinValue(1)
+                .setMaxValue(10) // Prevents the bot from freezing by calculating too far out
+            )
+    ];
     const rest = new REST({ version: "10" }).setToken(TOKEN);
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
     console.log("Bot started successfully. Waiting for storms...");
@@ -101,27 +122,50 @@ client.once("ready", async () => {
 client.on("interactionCreate", async (i) => {
     if (!i.isChatInputCommand()) return;
     
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const targetChannel = await client.channels.fetch(TARGET_CHANNEL_ID).catch(() => null);
+    if (!targetChannel) return i.editReply("Error: target channel not found.");
+
+    let responseText = "";
+
     if (i.commandName === "nextstorm") {
-        await i.deferReply({ flags: MessageFlags.Ephemeral });
-        const targetChannel = await client.channels.fetch(TARGET_CHANNEL_ID).catch(() => null);
-        if (!targetChannel) return i.editReply("Error: target channel not found.");
-        
         const start = findNextStormStart();
-        const response = start ? `⛈️ Next Storm: <t:${start}:R>` : "⛅ No storms.";
-        await targetChannel.send(response);
-        await i.editReply(`✅`);
+        responseText = start ? `⛈️ Next Storm: <t:${start}:R>` : "⛅ No storms.";
+    } 
+    else if (i.commandName === "storms") {
+        const count = i.options.getInteger("count") || 3;
+        let searchStart = nowSec();
+        let results = [];
+        
+        for (let j = 0; j < count; j++) {
+            const start = findNextStormStart(searchStart, 168);
+            if (!start) break;
+            const dur = findStormDuration(start, 24);
+            results.push({ start, end: start + dur, dur });
+            
+            // Move the search start time to after this storm ends + 1 step
+            searchStart = start + dur + STEP_SECONDS;
+        }
+        
+        if (!results.length) {
+            responseText = "⛅ No upcoming storms found.";
+        } else {
+            responseText = `⛈️ **Upcoming Storms:**\n\n`;
+            results.forEach((s, idx) => {
+                responseText += `**${idx+1}.** <t:${s.start}:F> (<t:${s.start}:R>)\n└ Ends: <t:${s.end}:t> | Duration: ${Math.floor(s.dur/3600)}h ${Math.floor((s.dur%3600)/60)}m\n\n`;
+            });
+        }
     }
+
+    await targetChannel.send(responseText);
+    await i.editReply(`✅ Weather data posted in <#${TARGET_CHANNEL_ID}>!`);
 });
 
-// The core loop: Checks every 5 seconds if a storm just started
 setInterval(async () => {
     const isNowStormy = isStorm(nowSec());
-    
-    // If it is stormy now, but wasn't 5 seconds ago -> The storm just started!
     if (isNowStormy && !lastWeatherState) {
         await playStormAudio();
     }
-    
     lastWeatherState = isNowStormy;
 }, 5000);
 
