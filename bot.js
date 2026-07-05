@@ -6,7 +6,7 @@ const fs = require('fs');
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
-const TARGET_CHANNEL_ID = "1510862057900347483";
+const TARGET_CHANNEL_ID = "1523156238815199393";
 const VOICE_CHANNEL_ID = process.env.VOICE_CHANNEL_ID;
 
 const SEED = -1753269629;
